@@ -6,3 +6,6 @@ chroma
 snapshots
 __pycache__
 .DS_Store
+chroma_db
+enhanced_backups
+reconstructed_chroma
