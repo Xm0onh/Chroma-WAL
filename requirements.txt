@@ -1,0 +1,6 @@
+openai
+langchain
+langchain-chroma
+langchain-openai
+langchain-community
+watchdog

@@ -1,0 +1,8 @@
+
+venv/
+config.py
+/data
+chroma
+snapshots
+__pycache__
+.DS_Store
