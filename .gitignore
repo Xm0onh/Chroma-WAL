@@ -9,3 +9,5 @@ __pycache__
 chroma_db
 enhanced_backups
 reconstructed_chroma
+processed_files
+data_folder

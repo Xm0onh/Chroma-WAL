@@ -7,6 +7,8 @@ import sqlite3
 import json
 from datetime import datetime
 import numpy as np
+import zlib
+import base64
 
 class EnhancedBackupSystem:
     def __init__(self):
@@ -53,7 +55,6 @@ class EnhancedBackupSystem:
             settings=settings
         )
         
-        # Wait for SQLite database creation
         sqlite_path = os.path.join(self.DB_DIR, 'chroma.sqlite3')
         while not os.path.exists(sqlite_path):
             pass
@@ -65,35 +66,47 @@ class EnhancedBackupSystem:
             metadata={"hnsw:space": "cosine"}
         )
 
+    def compress_numpy_array(self, arr):
+        """Compress numpy array to bytes."""
+        arr_bytes = arr.tobytes()
+        compressed = zlib.compress(arr_bytes)
+        return base64.b64encode(compressed).decode('utf-8')
+
     def create_enhanced_backup(self, text, embedding, timestamp):
-        """Create a backup including both WAL and embedding data."""
+        """Create an optimized backup with compressed embeddings."""
         backup_timestamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Create timestamp-specific backup directory
         backup_dir = os.path.join(self.BACKUP_DIR, backup_timestamp)
         os.makedirs(backup_dir, exist_ok=True)
         
-        # 1. Backup WAL files
+        # 1. Save compressed embedding
+        compressed_embedding = self.compress_numpy_array(embedding)
+        
+        # 2. Save WAL files with compression
         wal_files = []
         for root, _, files in os.walk(self.DB_DIR):
             for file in files:
                 if file.endswith(('-wal', '.wal', '.shm')):
                     source_path = os.path.join(root, file)
                     dest_path = os.path.join(backup_dir, file)
-                    shutil.copy2(source_path, dest_path)
-                    wal_files.append(file)
+                    with open(source_path, 'rb') as src, open(dest_path + '.gz', 'wb') as dst:
+                        dst.write(zlib.compress(src.read()))
+                    wal_files.append(file + '.gz')
 
-        # 2. Save embedding and text data
-        embedding_data = {
+        # 3. Save metadata and compressed embedding
+        backup_data = {
             'text': text,
-            'embedding': embedding.tolist(),
+            'embedding_compressed': compressed_embedding,
+            'embedding_shape': embedding.shape,
+            'embedding_dtype': str(embedding.dtype),
             'timestamp': backup_timestamp,
-            'model': self.model_name
+            'model': self.model_name,
+            'wal_files': wal_files,
+            'version': '2.0'  # Version tracking for compatibility
         }
         
-        embedding_file = os.path.join(backup_dir, 'embedding_data.json')
-        with open(embedding_file, 'w') as f:
-            json.dump(embedding_data, f, indent=2)
+        metadata_path = os.path.join(backup_dir, 'backup_data.json')
+        with open(metadata_path, 'w') as f:
+            json.dump(backup_data, f)
         
         return backup_dir, wal_files
 
@@ -102,53 +115,51 @@ class EnhancedBackupSystem:
         backup_dir = os.path.join(self.BACKUP_DIR, timestamp)
         if not os.path.exists(backup_dir):
             raise ValueError(f"No backup found for timestamp: {timestamp}")
-            
-        # Load embedding data
-        embedding_file = os.path.join(backup_dir, 'embedding_data.json')
-        with open(embedding_file, 'r') as f:
-            embedding_data = json.load(f)
-            
-        return embedding_data
+        
+        metadata_path = os.path.join(backup_dir, 'backup_data.json')
+        with open(metadata_path, 'r') as f:
+            backup_data = json.load(f)
+        
+        return backup_data
 
 def main():
-    # Initialize the backup system
     backup_system = EnhancedBackupSystem()
-    
-    # Setup ChromaDB
     collection = backup_system.setup_chroma()
     
-    # Get input and process
-    # Todo -> do it for files
     print("Enter your text:")
     text = input().strip()
     
-    # Generate embedding
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     embedding = backup_system.get_embedding(text)
     
-    # Store in ChromaDB
     collection.add(
         embeddings=[embedding.tolist()],
         documents=[text],
         ids=[f"doc_{timestamp}"]
     )
     
-    # Create enhanced backup
     backup_dir, wal_files = backup_system.create_enhanced_backup(text, embedding, timestamp)
     
     print("\nBackup created successfully!")
     print(f"Backup location: {backup_dir}")
     print("\nContents:")
-    print("1. WAL files:")
+    print("1. Compressed WAL files:")
     for wal in wal_files:
         print(f"  - {wal}")
-    print("2. Embedding data: embedding_data.json")
+    print("2. Backup data: backup_data.json")
     
-    # Demonstrate loading backup
-    print("\nLoading backup to verify...")
     loaded_data = backup_system.load_backup(timestamp)
+    print(f"\nVerification:")
     print(f"Original text: {loaded_data['text']}")
-    print(f"Embedding shape: {len(loaded_data['embedding'])} dimensions")
+    print(f"Embedding shape: {loaded_data['embedding_shape']}")
+    
+    # Print size comparison
+    original_size = len(str(embedding.tolist()))
+    compressed_size = len(loaded_data['embedding_compressed'])
+    print(f"\nStorage efficiency:")
+    print(f"Original size: {original_size:,} bytes")
+    print(f"Compressed size: {compressed_size:,} bytes")
+    print(f"Compression ratio: {original_size/compressed_size:.2f}x")
 
 if __name__ == "__main__":
     main()
